@@ -1,4 +1,4 @@
-use bevy::prelude::*;
+use bevy::{core::FixedTimestep, prelude::*};
 
 pub struct SnakePlugin;
 
@@ -6,12 +6,27 @@ impl Plugin for SnakePlugin {
     fn build(&self, app: &mut AppBuilder) {
         app.add_startup_system(setup::setup.system());
         app.add_startup_stage("snake_setup", SystemStage::single(setup::spawn_snake.system()));
-        app.add_system(snake_movement.system());
+        // app.add_system(snake_movement.system());
         app.add_system_set_to_stage(
             CoreStage::PostUpdate, 
             SystemSet::new()
             .with_system(grid_size_to_sprite_size.system())
             .with_system(grid_position_to_translation.system())
+        );
+
+        app.add_system(
+            snake_input.system()
+            .label(SnakeMovement::Input)
+            .before(SnakeMovement::Movement)
+        );
+
+        app.add_system_set(
+            SystemSet::new()
+            .with_run_criteria(FixedTimestep::step(0.25))
+            .with_system(
+                snake_fixed_movement.system()
+                .label(SnakeMovement::Movement)
+            )
         );
     }
 }
@@ -19,7 +34,9 @@ impl Plugin for SnakePlugin {
 const ARENA_GRID_SIZE: f32 = 10.;
 
 // Component defs
-struct SnakeHead;
+struct SnakeHead {
+    dir: SnakeDirection
+}
 struct SnakeMaterials {
     head_material: Handle<ColorMaterial>
 }
@@ -31,6 +48,40 @@ struct SizeInGrid {
 struct PositionInGrid {
     x: i32,
     y: i32,
+}
+
+#[derive(PartialEq, Clone, Copy, Debug)]
+enum SnakeDirection {
+    Left,
+    Right,
+    Up,
+    Down,
+}
+
+impl SnakeDirection {
+    fn flipped(self) -> Self {
+        match self {
+            SnakeDirection::Up => SnakeDirection::Down,
+            SnakeDirection::Down => SnakeDirection::Up,
+            SnakeDirection::Left => SnakeDirection::Right,
+            SnakeDirection::Right => SnakeDirection::Left
+        }
+    }
+
+    fn to_xy(&self) -> (i32, i32) {
+        match &self {
+            SnakeDirection::Up => (0, 1),
+            SnakeDirection::Down => (0, -1),
+            SnakeDirection::Left => (-1, 0),
+            SnakeDirection::Right => (1, 0)
+        }
+    }
+}
+
+#[derive(PartialEq, Debug, Eq, Clone, Hash, SystemLabel)]
+enum SnakeMovement {
+    Input,
+    Movement,
 }
 
 mod setup {
@@ -49,27 +100,44 @@ mod setup {
             ..Default::default()
         };
         commands.spawn_bundle(sprite_bundle)
-        .insert(SnakeHead)
+        .insert(SnakeHead {dir: SnakeDirection::Up})
         .insert(SizeInGrid {size: 0.8})
         .insert(PositionInGrid {x: 3, y: 3});
     }
 }
 
-
-fn snake_movement(
+fn snake_input(
     key_input: Res<Input<KeyCode>>,
-    mut head_positions: Query<&mut PositionInGrid, With<SnakeHead>>
+    mut heads: Query<&mut SnakeHead>
 ) {
-    for mut grid_pos in head_positions.iter_mut() {
-        if key_input.pressed(KeyCode::A) {
-            grid_pos.x -= 1;
+    
+    if let Some(mut head) = heads.iter_mut().next() {
+        let dir = if key_input.pressed(KeyCode::A) {
+            SnakeDirection::Left
         } else if key_input.pressed(KeyCode::D) {
-            grid_pos.x += 1;
-        } else if key_input.pressed(KeyCode::S) {
-            grid_pos.y -= 1;
+            SnakeDirection::Right
         } else if key_input.pressed(KeyCode::W) {
-            grid_pos.y += 1;
+            SnakeDirection::Up
+        } else if key_input.pressed(KeyCode::S) {
+            SnakeDirection::Down
+        } else {
+            head.dir
+        };
+
+        // prevent snake from immediately going opposite direction
+        if dir != head.dir.flipped() {
+            head.dir = dir;
         }
+    }
+}
+
+fn snake_fixed_movement(
+    mut query: Query<(&mut PositionInGrid, &SnakeHead)>
+) {
+    for (mut grid_pos, head) in query.iter_mut() {
+        let (dx, dy) = head.dir.to_xy();
+        grid_pos.x += dx;
+        grid_pos.y += dy;
     }
 }
 
